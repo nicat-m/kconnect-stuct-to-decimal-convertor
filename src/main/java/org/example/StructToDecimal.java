@@ -8,16 +8,22 @@ import org.apache.kafka.connect.transforms.Transformation;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
-import java.util.Map;
-import org.apache.kafka.connect.data.Struct;
+import java.util.*;
 
 public class StructToDecimal<R extends ConnectRecord<R>> implements Transformation<R> {
 
-    private String fieldName;
+    private Set<String> fieldNames;
 
     @Override
     public void configure(Map<String, ?> configs) {
-        this.fieldName = (String) configs.get("field.name");
+        String fieldNamesStr = (String) configs.get("field.names");
+        if (fieldNamesStr == null || fieldNamesStr.trim().isEmpty()) {
+            throw new IllegalArgumentException("Missing 'field.names' config.");
+        }
+        this.fieldNames = new HashSet<>();
+        for (String name : fieldNamesStr.split(",")) {
+            fieldNames.add(name.trim());
+        }
     }
 
     @Override
@@ -29,36 +35,31 @@ public class StructToDecimal<R extends ConnectRecord<R>> implements Transformati
         Struct valueStruct = (Struct) record.value();
         Schema schema = record.valueSchema();
 
-        Field field = schema.field(fieldName);
-        if (field == null) {
-            return record;
-        }
-
-        Struct decimalStruct = valueStruct.getStruct(fieldName);
-        if (decimalStruct == null) {
-            return record;
-        }
-
-        Integer scale = decimalStruct.getInt32("scale");
-        ByteBuffer bytes = ByteBuffer.wrap(decimalStruct.getBytes("value"));
-        BigInteger unscaled = new BigInteger(bytes.array());
-        BigDecimal decimalValue = new BigDecimal(unscaled, scale);
-
-        // New schema: same as original but replace the field type
+        // Yeni schema
         SchemaBuilder newSchemaBuilder = SchemaBuilder.struct().name(schema.name());
         for (Field f : schema.fields()) {
-            if (f.name().equals(fieldName)) {
-                newSchemaBuilder.field(f.name(), Schema.FLOAT64_SCHEMA); // use float64 (double)
+            if (fieldNames.contains(f.name())) {
+                newSchemaBuilder.field(f.name(), Schema.FLOAT64_SCHEMA);
             } else {
                 newSchemaBuilder.field(f.name(), f.schema());
             }
         }
         Schema newSchema = newSchemaBuilder.build();
 
+        // Yeni struct
         Struct newStruct = new Struct(newSchema);
         for (Field f : schema.fields()) {
-            if (f.name().equals(fieldName)) {
-                newStruct.put(f.name(), decimalValue.doubleValue());  // converted field
+            if (fieldNames.contains(f.name())) {
+                Struct decimalStruct = valueStruct.getStruct(f.name());
+                if (decimalStruct != null) {
+                    Integer scale = decimalStruct.getInt32("scale");
+                    ByteBuffer bytes = ByteBuffer.wrap(decimalStruct.getBytes("value"));
+                    BigInteger unscaled = new BigInteger(bytes.array());
+                    BigDecimal decimalValue = new BigDecimal(unscaled, scale);
+                    newStruct.put(f.name(), decimalValue.doubleValue());
+                } else {
+                    newStruct.put(f.name(), null);
+                }
             } else {
                 newStruct.put(f.name(), valueStruct.get(f));
             }
@@ -77,7 +78,12 @@ public class StructToDecimal<R extends ConnectRecord<R>> implements Transformati
 
     @Override
     public ConfigDef config() {
-        return new ConfigDef().define("field.name", ConfigDef.Type.STRING, ConfigDef.Importance.HIGH, "Field name to convert");
+        return new ConfigDef().define(
+                "field.names",
+                ConfigDef.Type.STRING,
+                ConfigDef.Importance.HIGH,
+                "Comma-separated list of field names to convert from STRUCT to double"
+        );
     }
 
     @Override

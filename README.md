@@ -40,6 +40,6 @@ plugin.path=/opt/kafka/plugins
 
   "transforms": "decimalConvert"
   "transforms.decimalConvert.type": "org.example.StructToDecimal",
-  "transforms.decimalConvert.field.name": "total_amount",
+  "transforms.decimalConvert.field.names": "total_amount",
   
 ```
